@@ -1,2 +1,3 @@
 import {mealHandler} from '../lib/neis.mjs';
-export default mealHandler;
+// Vercel Web Standard Function entry point.
+export default { fetch(request) { return mealHandler(request); } };
