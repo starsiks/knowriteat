@@ -7,3 +7,16 @@
   [headers.values]
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
+
+# Both hosts expose the same browser API paths.
+[[redirects]]
+  from = "/api/schools"
+  to = "/.netlify/functions/schools"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/meals"
+  to = "/.netlify/functions/meals"
+  status = 200
+  force = true
