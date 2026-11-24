@@ -47,7 +47,7 @@ function renderStudents(){const box=$('studentList');if(!state.students.length){
 function syncSettings(){const s=student();renderStudents();document.querySelectorAll('input[name=nameMode]').forEach(r=>{r.checked=(s?.nameMode||'dotted')===r.value;r.disabled=!s});document.querySelectorAll('input[name=dateMode]').forEach(r=>{r.checked=(s?.dateMode||'dotted')===r.value;r.disabled=!s});$('traceVal').textContent=s?.trace??6;$('soloVal').textContent=s?.solo??2;$('rowTotal').textContent=`총 ${(s?.trace??6)+(s?.solo??2)} / 8줄 · 진한 본보기 1줄은 별도`;const t=s?.trace??6,v=s?.solo??2;for(const [id,disabled] of [['traceMinus',!s||t<=0],['tracePlus',!s||t+v>=8],['soloMinus',!s||v<=0],['soloPlus',!s||t+v>=8]])$(id).disabled=disabled;renderPreview()}
 // A4: 794 x 1123. 엘점선체를 실제 폰트로 사용합니다.
 // @font-face는 index.html에서 제공하고 PDF 래스터화 시 SVG에 내장합니다.
-const WRITE_FONT="Malgun Gothic,Noto Sans CJK KR,sans-serif";
+const WRITE_FONT="'NanumGothicEco','NanumGothic','Malgun Gothic',sans-serif";
 const UI_FONT="Malgun Gothic,Noto Sans CJK KR,sans-serif";
 const DASH_FONT="ElDot";
 function strokeText(x,y,txt,size,anchor='middle'){
@@ -163,7 +163,27 @@ for(let i=0;i<count;i++){const page=3+i*3,img=page+1,content=page+2,jpeg=jpegs[i
  const cmd=`q\n595.28 0 0 841.89 0 0 cm\n/Im${i} Do\nQ\n`;object(content,`<< /Length ${bytes(cmd).length} >>\nstream\n${cmd}endstream`);}
 const start=total;const max=2+3*count;write(`xref\n0 ${max+1}\n0000000000 65535 f \n`);for(let i=1;i<=max;i++)write(`${String(offsets[i]).padStart(10,'0')} 00000 n \n`);write(`trailer\n<< /Size ${max+1} /Root 1 0 R >>\nstartxref\n${start}\n%%EOF`);return new Blob(chunks,{type:'application/pdf'});}
 function jpegBytes(dataURL){const base64=dataURL.split(',')[1];const str=atob(base64),u=new Uint8Array(str.length);for(let i=0;i<str.length;i++)u[i]=str.charCodeAt(i);return u}
-async function svgToJpeg(svg){const source=new Blob([svg],{type:'image/svg+xml;charset=utf-8'});const src=URL.createObjectURL(source);try{const img=new Image();await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=()=>reject(Error('학습지 이미지 변환에 실패했습니다.'));img.src=src});const canvas=document.createElement('canvas');canvas.width=2382;canvas.height=3369;const ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0,canvas.width,canvas.height);return{data:jpegBytes(canvas.toDataURL('image/jpeg',.94)),width:canvas.width,height:canvas.height}}finally{URL.revokeObjectURL(src)}}
+async function svgToJpeg(svg){
+ // SVG가 이미지로 변환될 때 외부 웹폰트를 대체할 수 있으므로,
+ // 본보기 글자는 문서에 로드된 글꼴로 캔버스에 직접 그립니다.
+ await document.fonts.load('400 78px NanumGothicEco');
+ const doc=new DOMParser().parseFromString(svg,'image/svg+xml');
+ const labels=[...doc.querySelectorAll('text')].map(t=>({x:Number(t.getAttribute('x')),y:Number(t.getAttribute('y')),text:t.textContent,
+  family:t.getAttribute('font-family')||WRITE_FONT,size:Number(t.getAttribute('font-size')||20),weight:Number(t.getAttribute('font-weight')||400),
+  align:t.getAttribute('text-anchor')||'middle',fill:t.getAttribute('fill')||'#111'}));
+ doc.querySelectorAll('text').forEach(t=>t.remove());
+ const base=new XMLSerializer().serializeToString(doc.documentElement);
+ const source=new Blob([base],{type:'image/svg+xml;charset=utf-8'}),src=URL.createObjectURL(source);
+ try{
+  const img=new Image();await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=()=>reject(Error('학습지 이미지 변환에 실패했습니다.'));img.src=src});
+  const canvas=document.createElement('canvas');canvas.width=2382;canvas.height=3369;
+  const ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(img,0,0,canvas.width,canvas.height);
+  ctx.save();ctx.scale(3,3);ctx.textBaseline='alphabetic';
+  for(const t of labels){ctx.font=`${t.weight} ${t.size}px ${t.family}`;ctx.fillStyle=t.fill;ctx.textAlign=t.align==='start'?'left':t.align==='end'?'right':'center';ctx.fillText(t.text,t.x,t.y)}
+  ctx.restore();return{data:jpegBytes(canvas.toDataURL('image/jpeg',.94)),width:canvas.width,height:canvas.height};
+ }finally{URL.revokeObjectURL(src)}
+}
 function download(blob,filename){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000)}
 async function makePDF(kind){if(!state.selected.length){status('pdfStatus','먼저 낱말을 하나 이상 선택하세요.',true);return;}const list=kind==='all'?state.students:kind==='blank'?[null]:[student()];if(!list.length||(kind==='one'&&!student())){status('pdfStatus','학생을 먼저 추가하세요. 빈 이름 학습지는 학생 등록 없이 다운로드할 수 있습니다.',true);return;}status('pdfStatus',`PDF 생성 중 (${list.length}쪽)…`);try{const imgs=[];for(const s of list){imgs.push(await svgToJpeg(buildSVG(s,kind==='blank')))}const file=createPdf(imgs);const name=kind==='blank'?'빈이름':kind==='all'?'전체학생':(student()?.name||'학습지');download(file,`${state.date}_알고쓰고먹자_${name}.pdf`);status('pdfStatus',`${list.length}쪽 PDF를 다운로드했습니다.`)}catch(e){console.error(e);status('pdfStatus','PDF 생성 오류: '+e.message,true)}}
 $('searchSchool').onclick=searchSchools;$('schoolQuery').addEventListener('keydown',e=>{if(e.key==='Enter')searchSchools()});$('today').onclick=()=>{$('date').value=today();state.date=today();renderPreview();save();if(state.school)loadMeals()};$('date').onchange=()=>{state.date=$('date').value;state.menus=[];state.selected=[];state.candidates=[];renderWords();renderPreview();save();if(state.school)loadMeals()};$('loadMeals').onclick=loadMeals;
