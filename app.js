@@ -1,11 +1,17 @@
 'use strict';
 const $=id=>document.getElementById(id), KEY='algo-write-eat-v1';
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
-const defaults=()=>({nameMode:'dotted',dateMode:'dotted',trace:6,solo:2});
-let state={school:null,date:today(),students:[],active:null,menus:[],selected:[],candidates:[],history:{}};
+const defaults=()=>({nameMode:'dotted',dateMode:'dotted',trace:6,solo:2,sentenceDisplay:'hint',sheetType:'word'});
+let state={school:null,date:today(),students:[],active:null,menus:[],selected:[],candidates:[],history:{},sheetType:'word',sentenceSelected:[],sentenceCommon:{},sentenceOverrides:{},sentenceScope:'common',sentenceDate:today()};
 try{const stored=JSON.parse(localStorage.getItem(KEY)||'null');if(stored&&typeof stored==='object'){
   state={...state,...stored,date:today(),menus:[],selected:[],candidates:[]};
   if(!Array.isArray(state.students))state.students=[];
+  if(!['word','sentence'].includes(state.sheetType))state.sheetType='word';
+  if(!Array.isArray(state.sentenceSelected))state.sentenceSelected=[];
+  if(!state.sentenceCommon||typeof state.sentenceCommon!=='object')state.sentenceCommon={};
+  if(!state.sentenceOverrides||typeof state.sentenceOverrides!=='object')state.sentenceOverrides={};
+  if(state.sentenceDate!==today()){state.sentenceSelected=[];state.sentenceCommon={};state.sentenceOverrides={};state.sentenceDate=today()}
+
   // v1 초기 배포에 포함된 샘플 학생만 정리합니다. 실제로 추가한 학생은 유지합니다.
   state.students=state.students.filter(x=>!(x.id==='s1'&&x.name==='양지성'));
   if(!state.students.some(x=>x.id===state.active))state.active=state.students[0]?.id||null;
@@ -23,10 +29,70 @@ try {
     localStorage.setItem(KEY,JSON.stringify(state));
   }
 } catch {}
-const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(state))}catch{}};
+const save=()=>{try{storeCurrentMode();localStorage.setItem(KEY,JSON.stringify(state))}catch{}};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const xml=esc;
 const student=()=>state.students.find(x=>x.id===state.active)||null;
+// 기존 사용자 설정과 호환: 저장된 학생별 학습지 유형을 우선 적용합니다.
+const activeSheetType=()=>{if(state.workMode==='basic')return 'word';const type=student()?.sheetType;return ['word','sentence'].includes(type)?type:state.sheetType;};
+// 예전 버전에서 저장된 학생은 현재 선택 학생의 기존 유형을 이어받고,
+// 나머지는 낱말형을 초기값으로 설정합니다. 이후 변경은 각각 독립적으로 저장됩니다.
+for(const s of state.students){
+ if(!['word','sentence'].includes(s.sheetType))s.sheetType=s.id===state.active?state.sheetType:'word';
+}
+state.sheetType=activeSheetType();
+// Each mode keeps its own worksheet choices and per-student settings.
+// School and student directory (id/name) are shared. Migrate existing v2.2.3
+// preferences into advanced, and begin with the familiar quick/basic view.
+const studentPref=(s)=>({nameMode:s.nameMode||'dotted',dateMode:s.dateMode||'dotted',trace:Number.isInteger(s.trace)?s.trace:6,solo:Number.isInteger(s.solo)?s.solo:2,sentenceDisplay:s.sentenceDisplay||'hint',sheetType:s.sheetType||'word'});
+const snapshot=()=>({date:state.date,selected:[...state.selected],sentenceSelected:[...state.sentenceSelected],sentenceCommon:{...state.sentenceCommon},sentenceOverrides:JSON.parse(JSON.stringify(state.sentenceOverrides)),sentenceScope:state.sentenceScope,sentenceDate:state.sentenceDate,students:Object.fromEntries(state.students.map(s=>[s.id,studentPref(s)]))});
+if(!state.modeData||!state.modeData.basic||!state.modeData.advanced){
+ const previous=snapshot();
+ state.modeData={basic:{...previous,students:Object.fromEntries(state.students.map(s=>[s.id,{...studentPref(s),sheetType:'word'}]))},advanced:previous};
+ state.workMode='basic';
+}
+if(!['basic','advanced'].includes(state.workMode))state.workMode='basic';
+function restoreMode(mode){
+ const data=state.modeData[mode]||{};
+ state.date=data.date||today();
+ state.selected=Array.isArray(data.selected)?[...data.selected]:[];
+ state.sentenceSelected=Array.isArray(data.sentenceSelected)?[...data.sentenceSelected]:[];
+ state.sentenceCommon={...(data.sentenceCommon||{})};
+ state.sentenceOverrides=JSON.parse(JSON.stringify(data.sentenceOverrides||{}));
+ state.sentenceScope=data.sentenceScope||'common';
+ state.sentenceDate=data.sentenceDate||today();
+ for(const s of state.students){
+   const own=data.students?.[s.id]||defaults();
+   Object.assign(s,{...defaults(),...own,sheetType:mode==='basic'?'word':own.sheetType||'word'});
+ }
+ state.sheetType=mode==='basic'?'word':activeSheetType();
+}
+restoreMode(state.workMode);
+function storeCurrentMode(){state.modeData[state.workMode]=snapshot()}
+function updateModeUI(){
+ const basic=state.workMode==='basic';
+ $('appLayout').classList.toggle('basic',basic);
+ $('appLayout').classList.toggle('advanced',!basic);
+ $('basicTab').classList.toggle('active',basic);
+ $('advancedTab').classList.toggle('active',!basic);
+ $('basicTab').setAttribute('aria-pressed',String(basic));
+ $('advancedTab').setAttribute('aria-pressed',String(!basic));
+ $('menuHeading').textContent=(basic?'③':'④')+' 오늘의 메뉴와 낱말';
+ $('settingHeading').textContent=(basic?'④':'⑤')+' 학생별 쓰기 설정';
+ $('previewHeading').textContent=(basic?'⑤':'⑥')+' 학습지 미리보기';
+}
+function switchWorkMode(mode){
+ if(mode===state.workMode||!['basic','advanced'].includes(mode))return;
+ storeCurrentMode();
+ const oldDate=state.date;
+ state.workMode=mode;
+ restoreMode(mode);
+ updateModeUI();
+ $('date').value=state.date;
+ $('menuEditor').value=state.menus.join('\n');
+ syncSettings();renderWords();renderExamples();renderPreview();save();
+ if(oldDate!==state.date&&state.school)loadMeals();
+}
 const status=(id,msg,error=false)=>{$(id).textContent=msg;$(id).classList.toggle('err',!!error)};
 const cleanMenu=s=>String(s).replace(/<br\s*\/?\s*>/gi,' ').replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').replace(/\([^)]*\)/g,'').replace(/\[[^\]]*\]/g,'').replace(/[0-9]+(?:\.[0-9]+)*/g,'').replace(/[★☆*]/g,'').trim();
 const foodWords=[
@@ -36,15 +102,71 @@ const scoreWord=(w,m)=>{const arr=[...w];let score=arr.length===2?35:arr.length=
 function candidatesFromMenus(){const found=new Map();state.menus.forEach((raw,i)=>{const m=cleanMenu(raw).replace(/[^가-힣]/g,'');for(const w of foodWords){if(m.includes(w)){
  const score=scoreWord(w,m)-i*.08; if(!found.has(w)||found.get(w)<score)found.set(w,score);
 }}if(m.length>=2&&m.length<=4&&!found.has(m))found.set(m,scoreWord(m,m)-14);});return [...found].sort((a,b)=>b[1]-a[1]).map(x=>x[0]).slice(0,32)}
+function resetSentenceForDate(){state.sentenceSelected=[];state.sentenceCommon={};state.sentenceOverrides={};state.sentenceDate=state.date;}
+function updateSentenceMenus(){
+  const available=state.menus;
+  state.sentenceSelected=state.sentenceSelected.filter(w=>available.includes(w)||state.candidates.includes(w)).slice(0,5);
+  if(!state.sentenceSelected.length)state.sentenceSelected=available.slice(0,5);
+  for(const w of available)if(!Object.prototype.hasOwnProperty.call(state.sentenceCommon,w))state.sentenceCommon[w]=w;
+}
+function exampleFor(s,w){
+  const o=state.sentenceOverrides?.[s?.id];
+  return o&&Object.prototype.hasOwnProperty.call(o,w)?o[w]:(state.sentenceCommon[w]??w);
+}
 function autoWords(){let out=[];for(const w of state.candidates){if(out.join('').length+w.length>9)continue;if(out.some(x=>x.includes(w)||w.includes(x)))continue;out.push(w)}if(out.length<2)for(const w of state.candidates){if(!out.includes(w)&&out.join('').length+w.length<=9)out.push(w)}state.selected=out}
-function setMenus(menus){state.menus=menus.map(cleanMenu).filter(Boolean).slice(0,9);$('menuEditor').value=state.menus.join('\n');state.candidates=candidatesFromMenus();autoWords();renderWords();renderPreview();save()}
-function renderWords(){ $('menus').innerHTML=state.menus.length?state.menus.map(x=>`<span class="menu">${esc(x)}</span>`).join(''):'<span class="muted">급식 메뉴가 없습니다. 직접 입력해 사용할 수 있습니다.</span>';
- const choices=[...new Set([...state.candidates,...state.selected])];$('suggestions').innerHTML=choices.length?choices.map(w=>`<button type="button" class="pill word ${state.selected.includes(w)?'active':''}" data-word="${esc(w)}">${esc(w)}</button>`).join(''):'<span class="muted">메뉴를 조회하면 추천 낱말이 나타납니다.</span>';
- $('wordCount').textContent=`선택 ${state.selected.length}개 · ${state.selected.join('').length}/9음절`;
- $('suggestions').querySelectorAll('[data-word]').forEach(el=>el.onclick=()=>toggleWord(el.dataset.word));}
-function toggleWord(w){if(state.selected.includes(w))state.selected=state.selected.filter(x=>x!==w);else if(state.selected.join('').length+[...w].length>9)status('wordStatus','총 9음절을 넘을 수 없습니다.',true);else{state.selected.push(w);state.history[w]=(state.history[w]||0)+1;status('wordStatus','')}renderWords();renderPreview();save()}
-function renderStudents(){const box=$('studentList');if(!state.students.length){box.innerHTML='<div class="muted">학생이 없습니다. 아래에서 추가하세요.</div>';return;}box.innerHTML=state.students.map(x=>`<div class="studentRow"><button class="name ${state.active===x.id?'active':''}" data-student="${esc(x.id)}">${esc(x.name)}</button><button class="secondary tiny danger" title="학생 삭제" data-delete="${esc(x.id)}">삭제</button></div>`).join('');box.querySelectorAll('[data-student]').forEach(b=>b.onclick=()=>{state.active=b.dataset.student;syncSettings();save()});box.querySelectorAll('[data-delete]').forEach(b=>b.onclick=()=>{if(!confirm('이 학생을 목록에서 삭제할까요?'))return;state.students=state.students.filter(x=>x.id!==b.dataset.delete);if(!student())state.active=state.students[0]?.id||null;syncSettings();save()})}
-function syncSettings(){const s=student();renderStudents();document.querySelectorAll('input[name=nameMode]').forEach(r=>{r.checked=(s?.nameMode||'dotted')===r.value;r.disabled=!s});document.querySelectorAll('input[name=dateMode]').forEach(r=>{r.checked=(s?.dateMode||'dotted')===r.value;r.disabled=!s});$('traceVal').textContent=s?.trace??6;$('soloVal').textContent=s?.solo??2;$('rowTotal').textContent=`총 ${(s?.trace??6)+(s?.solo??2)} / 8줄 · 진한 본보기 1줄은 별도`;const t=s?.trace??6,v=s?.solo??2;for(const [id,disabled] of [['traceMinus',!s||t<=0],['tracePlus',!s||t+v>=8],['soloMinus',!s||v<=0],['soloPlus',!s||t+v>=8]])$(id).disabled=disabled;renderPreview()}
+function setMenus(menus){state.menus=menus.map(cleanMenu).filter(Boolean).slice(0,9);$('menuEditor').value=state.menus.join('\n');state.candidates=candidatesFromMenus();autoWords();updateSentenceMenus();renderWords();renderExamples();renderPreview();save()}
+function renderWords(){
+ $('menus').innerHTML=state.menus.length?state.menus.map(x=>`<span class="menu">${esc(x)}</span>`).join(''):'<span class="muted">급식 메뉴가 없습니다. 직접 입력할 수 있습니다.</span>';
+ const sent=state.sheetType==='sentence';
+ $('selectionTitle').textContent=sent?'추천 낱말과 오늘의 메뉴 (문장 쓰기형)':'추천 낱말과 오늘의 메뉴 (낱말 쓰기형)';
+ $('customWord').placeholder=sent?'예: 우유, 주먹밥':'예: 두부, 바나나';
+ // 추천 낱말을 먼저, 실제 급식 메뉴는 그 뒤에 제시합니다.
+ const recommended=[...new Set([...state.candidates, ...(sent?[]:state.selected.filter(w=>!state.menus.includes(w)))])];
+ const originals=[...new Set(state.menus)];
+ const extra=sent?state.sentenceSelected.filter(w=>!recommended.includes(w)&&!originals.includes(w)):[];
+ const selected=sent?state.sentenceSelected:state.selected;
+ const section=(title,words,kind)=>words.length?`<div class="choiceSection"><div class="choiceLabel">${title}</div><div class="pills">${words.map(w=>`<button type="button" class="pill word ${selected.includes(w)?'active':''}" data-word="${esc(w)}" title="${esc(w)}">${esc(w)}</button>`).join('')}</div></div>`:'';
+ $('suggestions').innerHTML=(recommended.length||originals.length||extra.length)
+   ?section('추천 낱말',recommended,'word')+section('오늘의 메뉴',originals,'menu')+section('직접 추가한 낱말',extra,'extra')
+   :'<span class="muted">메뉴를 조회하면 선택지가 나타납니다.</span>';
+ $('selectionCount').textContent=sent?`선택한 항목 ${selected.length} / 5개`:`선택한 글자 ${[...state.selected.join('')].length} / 9자`;
+ $('wordCount').textContent='';
+ $('selectionGuide').textContent=sent?'문장 쓰기형에서는 낱말 또는 메뉴를 최대 5개 선택할 수 있습니다. 음절 수 제한은 없습니다.':'낱말 쓰기형에서는 낱말 또는 메뉴를 합계 9음절 이내에서 선택할 수 있습니다.';
+ $('suggestions').querySelectorAll('[data-word]').forEach(el=>el.onclick=()=>toggleWord(el.dataset.word));
+}
+
+function toggleWord(w){
+ if(state.sheetType==='sentence'){
+  if(state.sentenceSelected.includes(w))state.sentenceSelected=state.sentenceSelected.filter(x=>x!==w);
+  else if(state.sentenceSelected.length>=5){status('wordStatus','문장 쓰기형은 한 페이지에 최대 5개 낱말·메뉴만 선택할 수 있습니다.',true);return}
+  else{state.sentenceSelected.push(w);if(!Object.prototype.hasOwnProperty.call(state.sentenceCommon,w))state.sentenceCommon[w]=w;}
+ }else{
+  if(state.selected.includes(w))state.selected=state.selected.filter(x=>x!==w);
+  else if([...state.selected.join('')].length+[...w].length>9){status('wordStatus','낱말 쓰기형은 선택한 낱말·메뉴의 합계가 9음절을 넘을 수 없습니다.',true);return}
+  else{state.selected.push(w);state.history[w]=(state.history[w]||0)+1}
+ }
+ status('wordStatus','');renderWords();renderExamples();renderPreview();save();
+}
+function renderExamples(){
+ const sentence=state.sheetType==='sentence';$('wordSettings').hidden=sentence;$('sentenceSettings').hidden=!sentence;
+ if(!sentence)return;
+ const scope=state.sentenceScope==='individual'?'individual':'common';
+ document.querySelectorAll('input[name=exampleScope]').forEach(r=>r.checked=r.value===scope);
+ const s=student(),target=$('exampleTarget'),rows=$('exampleRows');
+ target.textContent=scope==='individual'?(s?`현재 학생: ${s.name} (개별 설정)`:'학생을 먼저 선택하세요.'):'전체 학생에게 공통 적용 (개별 설정은 유지)';
+ rows.innerHTML=state.sentenceSelected.length?state.sentenceSelected.map((w,i)=>{
+  const own=scope==='individual'&&s&&Object.prototype.hasOwnProperty.call(state.sentenceOverrides[s.id]||{},w);
+  const v=scope==='individual'&&s?exampleFor(s,w):(state.sentenceCommon[w]??w);
+  return `<div class="exampleRow"><div class="lab" style="margin-bottom:5px">${i+1}. ${esc(w)}${own?' · 개별 설정':''}</div><div class="line"><div class="field"><input data-example="${i}" value="${esc(v)}" maxlength="90" placeholder="예시문 (비워두기 가능)" ${scope==='individual'&&!s?'disabled':''}></div><button type="button" class="secondary tiny" data-clear="${i}" title="예시문 비우기" ${scope==='individual'&&!s?'disabled':''}>비우기</button>${scope==='individual'?`<button type="button" class="secondary tiny" data-reset="${i}" title="공통 설정으로 복귀" ${!s?'disabled':''}>공통값</button>`:''}</div></div>`;
+ }).join(''):'<div class="muted">먼저 ③에서 메뉴를 선택해 주세요.</div>';
+ const store=(w,v)=>{if(scope==='individual'){if(!s)return;state.sentenceOverrides[s.id]??={};state.sentenceOverrides[s.id][w]=v}else state.sentenceCommon[w]=v;renderPreview();save()};
+ rows.querySelectorAll('[data-example]').forEach(el=>el.addEventListener('input',()=>store(state.sentenceSelected[Number(el.dataset.example)],el.value)));
+ rows.querySelectorAll('[data-clear]').forEach(el=>el.onclick=()=>{store(state.sentenceSelected[Number(el.dataset.clear)],'');renderExamples()});
+ rows.querySelectorAll('[data-reset]').forEach(el=>el.onclick=()=>{if(!s)return;const w=state.sentenceSelected[Number(el.dataset.reset)];delete (state.sentenceOverrides[s.id]||{})[w];renderExamples();renderPreview();save()});
+}
+function switchType(type){if(!['word','sentence'].includes(type))return;state.sheetType=type;const s=student();if(s)s.sheetType=type;document.querySelectorAll('input[name=sheetType]').forEach(r=>r.checked=r.value===type);renderWords();syncSettings();renderExamples();renderPreview();save()}
+function renderStudents(){const box=$('studentList');if(!state.students.length){box.innerHTML='<div class="muted">학생이 없습니다. 아래에서 추가하세요.</div>';return;}box.innerHTML=state.students.map(x=>`<div class="studentRow"><button class="name ${state.active===x.id?'active':''}" data-student="${esc(x.id)}">${esc(x.name)}</button><button class="secondary tiny danger" title="학생 삭제" data-delete="${esc(x.id)}">삭제</button></div>`).join('');box.querySelectorAll('[data-student]').forEach(b=>b.onclick=()=>{state.active=b.dataset.student;state.sheetType=activeSheetType();syncSettings();renderWords();save()});box.querySelectorAll('[data-delete]').forEach(b=>b.onclick=()=>{if(!confirm('이 학생을 목록에서 삭제할까요?'))return;state.students=state.students.filter(x=>x.id!==b.dataset.delete);if(!student())state.active=state.students[0]?.id||null;state.sheetType=activeSheetType();syncSettings();renderWords();save()})}
+function syncSettings(){const s=student();document.querySelectorAll('input[name=sheetType]').forEach(r=>r.checked=r.value===state.sheetType);renderStudents();renderExamples();document.querySelectorAll('input[name=nameMode]').forEach(r=>{r.checked=(s?.nameMode||'dotted')===r.value;r.disabled=!s});document.querySelectorAll('input[name=dateMode]').forEach(r=>{r.checked=(s?.dateMode||'dotted')===r.value;r.disabled=!s});document.querySelectorAll('input[name=sentenceDisplay]').forEach(r=>{r.checked=(s?.sentenceDisplay||'hint')===r.value;r.disabled=!s});$('sentenceDisplayTarget').textContent=s?`현재 설정 대상: ${s.name}`:'학생을 먼저 추가해 주세요.';$('traceVal').textContent=s?.trace??6;$('soloVal').textContent=s?.solo??2;$('rowTotal').textContent=`총 ${(s?.trace??6)+(s?.solo??2)} / 8줄 · 진한 본보기 1줄은 별도`;const t=s?.trace??6,v=s?.solo??2;for(const [id,disabled] of [['traceMinus',!s||t<=0],['tracePlus',!s||t+v>=8],['soloMinus',!s||v<=0],['soloPlus',!s||t+v>=8]])$(id).disabled=disabled;renderPreview()}
 // A4: 794 x 1123. 엘점선체를 실제 폰트로 사용합니다.
 // @font-face는 index.html에서 제공하고 PDF 래스터화 시 SVG에 내장합니다.
 const WRITE_FONT="'NanumGothicLocal','NanumGothic','Malgun Gothic',sans-serif";
@@ -138,14 +260,49 @@ function buildSVG(s=student(),blankOverride=false){
   }
   a.push('</svg>');return a.join('');
 }
-function renderPreview(){$('preview').innerHTML=buildSVG();}
+function buildSentenceSVG(s=student()){
+ const M=37.8,FULL=794-2*M,BOTTOM=1123-M,hy=M,hh=88,titleW=96,labelW=51,fieldX=M+titleW+labelW,fieldW=FULL-titleW-labelW;
+ const date=new Date((state.date||today())+'T12:00:00'),mon=date.getMonth()+1,day=date.getDate();
+ const name=[...String(s?.name||'')].slice(0,8),mode=s?.nameMode||'blank',dateMode=s?.dateMode||'dotted';
+ let a=[`<svg xmlns="http://www.w3.org/2000/svg" width="794" height="1123" viewBox="0 0 794 1123"><rect width="794" height="1123" fill="white"/>`];
+ a.push(`<rect x="${M}" y="${hy}" width="${titleW}" height="176" fill="#e8e8e8" stroke="#111" stroke-width="1.1"/>`);
+ for(const [t,dy] of [['알고',48],['쓰고',101],['먹자',154]])a.push(blackText(M+titleW/2,hy+dy,t,27,600,'middle',UI_FONT));
+ a.push(rect(M+titleW,hy,labelW,hh),rect(M+titleW,hy+hh,labelW,hh));
+ a.push(blackText(M+titleW+labelW/2,hy+hh/2+6,'날짜',15,500,'middle',UI_FONT),blackText(M+titleW+labelW/2,hy+hh+hh/2+6,'이름',15,500,'middle',UI_FONT));
+ const dw=[fieldW*.28,fieldW*.22,fieldW*.28,fieldW*.22];let dx=fieldX;
+ for(const [i,t] of [String(mon),'월',String(day),'일'].entries()){
+  const w=dw[i];a.push(rect(dx,hy,w,hh));
+  if(i%2===0){if(dateMode==='dotted')a.push(strokeText(dx+w/2,hy+68,t,65));else if(dateMode==='hint')a.push(blackText(dx+9,hy+22,t,21,400,'start'))}
+  else a.push(blackText(dx+w/2,hy+69,t,70,400));dx+=w;
+ }
+ const ny=hy+hh;
+ if(mode==='blank'||!name.length)a.push(rect(fieldX,ny,fieldW,hh));
+ else{const cw=fieldW/name.length;name.forEach((c,i)=>{const bx=fieldX+i*cw;a.push(rect(bx,ny,cw,hh));if(mode==='dotted')a.push(strokeText(bx+cw/2,ny+68,c,Math.min(74,cw*.79)));else a.push(blackText(bx+9,ny+22,c,20,400,'start'))})}
+ const list=state.sentenceSelected.slice(0,5),writingY=hy+176+12;
+ if(!list.length){a.push(rect(M,writingY,FULL,140));a.push(blackText(397,writingY+76,'문장 쓰기에 사용할 메뉴를 선택해 주세요',22,400,'middle',UI_FONT));}
+ else{
+  const blockH=(BOTTOM-writingY)/list.length;
+  list.forEach((w,i)=>{
+   const y=writingY+i*blockH,wordH=Math.min(77,Math.max(55,blockH*.21)),writeY=y+wordH+5,writeH=blockH-wordH-10;
+   const arr=[...w],charW=Math.min(67,FULL/Math.max(arr.length,1)),size=Math.min(58,charW*.78);
+   arr.forEach((c,j)=>{const x=M+j*charW;a.push(rect(x,y,charW,wordH));a.push(blackText(x+charW/2,y+(wordH+size)/2-4,c,size,400))});
+   a.push(rect(M,writeY,FULL,writeH));
+   const example=s?.sentenceDisplay==='blank'?'':String(exampleFor(s,w)||'');
+   if(example){const lines=wrapExample(example,36,3);lines.forEach((line,k)=>a.push(blackText(M+10,writeY+24+k*22,line,18,400,'start',WRITE_FONT)))}
+  });
+ }
+ a.push('</svg>');return a.join('');
+}
+function wrapExample(t,max,lines){const chars=[...t].slice(0,max*lines),out=[];for(let i=0;i<chars.length;i+=max)out.push(chars.slice(i,i+max).join(''));return out.slice(0,lines)}
+function activeSVG(s=student()){return (s?.sheetType||state.sheetType)==='sentence'?buildSentenceSVG(s):buildSVG(s)}
+function renderPreview(){$('preview').innerHTML=activeSVG();}
 function fitPreview(){
   const panel=document.querySelector('.previewPanel');
   const container=$('preview');
   if(!panel||!container)return;
   // 모든 설정 조절 중 A4 전체를 볼 수 있도록 화면 높이에 맞춰 축소합니다.
-  if(window.matchMedia('(max-width:950px)').matches){container.style.width='100%';return;}
-  const availableHeight=Math.max(250,window.innerHeight-315);
+  if(window.matchMedia('(max-width:820px)').matches){container.style.width='100%';return;}
+  const availableHeight=Math.max(250,window.innerHeight-252);
   const availableWidth=Math.max(220,panel.clientWidth-40);
   container.style.width=Math.min(620,availableWidth,availableHeight*210/297)+'px';
 }
@@ -185,9 +342,28 @@ async function svgToJpeg(svg){
  }finally{URL.revokeObjectURL(src)}
 }
 function download(blob,filename){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000)}
-async function makePDF(kind){if(!state.selected.length){status('pdfStatus','먼저 낱말을 하나 이상 선택하세요.',true);return;}const list=kind==='all'?state.students:kind==='blank'?[null]:[student()];if(!list.length||(kind==='one'&&!student())){status('pdfStatus','학생을 먼저 추가하세요. 빈 이름 학습지는 학생 등록 없이 다운로드할 수 있습니다.',true);return;}status('pdfStatus',`PDF 생성 중 (${list.length}쪽)…`);try{const imgs=[];for(const s of list){imgs.push(await svgToJpeg(buildSVG(s,kind==='blank')))}const file=createPdf(imgs);const name=kind==='blank'?'빈이름':kind==='all'?'전체학생':(student()?.name||'학습지');download(file,`${state.date}_알고쓰고먹자_${name}.pdf`);status('pdfStatus',`${list.length}쪽 PDF를 다운로드했습니다.`)}catch(e){console.error(e);status('pdfStatus','PDF 생성 오류: '+e.message,true)}}
-$('searchSchool').onclick=searchSchools;$('schoolQuery').addEventListener('keydown',e=>{if(e.key==='Enter')searchSchools()});$('today').onclick=()=>{$('date').value=today();state.date=today();renderPreview();save();if(state.school)loadMeals()};$('date').onchange=()=>{state.date=$('date').value;state.menus=[];state.selected=[];state.candidates=[];renderWords();renderPreview();save();if(state.school)loadMeals()};$('loadMeals').onclick=loadMeals;
-$('applyMenu').onclick=()=>{setMenus($('menuEditor').value.split(/\r?\n/));status('wordStatus','입력한 메뉴를 반영했습니다.')};$('addWord').onclick=()=>{const w=$('customWord').value.trim().replace(/\s+/g,'');if(!/^[가-힣]{1,9}$/.test(w)){status('wordStatus','한글 낱말을 1~9음절로 입력해 주세요.',true);return}if(!state.candidates.includes(w))state.candidates.unshift(w);if(!state.selected.includes(w))toggleWord(w);else renderWords();$('customWord').value=''};$('customWord').onkeydown=e=>{if(e.key==='Enter')$('addWord').click()};
-$('addStudent').onclick=()=>{const name=$('newStudent').value.trim();if(!name)return;const id='s'+Date.now()+Math.random().toString(36).slice(2,6);state.students.push({id,name,...defaults()});state.active=id;$('newStudent').value='';syncSettings();save()};$('newStudent').onkeydown=e=>{if(e.key==='Enter')$('addStudent').click()};document.querySelectorAll('input[name=nameMode]').forEach(r=>r.onchange=()=>{const s=student();if(!s)return;s.nameMode=r.value;syncSettings();save()});document.querySelectorAll('input[name=dateMode]').forEach(r=>r.onchange=()=>{const s=student();if(!s)return;s.dateMode=r.value;syncSettings();save()});$('traceMinus').onclick=()=>counter('trace',-1);$('tracePlus').onclick=()=>counter('trace',1);$('soloMinus').onclick=()=>counter('solo',-1);$('soloPlus').onclick=()=>counter('solo',1);$('resetSettings').onclick=()=>{const s=student();if(!s)return;Object.assign(s,defaults());syncSettings();save()};
-$('downloadOne').onclick=()=>makePDF('one');$('downloadBlank').onclick=()=>makePDF('blank');$('downloadAll').onclick=()=>makePDF('all');$('print').onclick=()=>window.print();
-fitPreview();$('date').value=state.date;if(state.school){$('schoolQuery').value=state.school.name;$('chosenSchool').textContent=`✓ ${state.school.name} · ${state.school.office}`;loadMeals()}syncSettings();renderWords();
+async function makePDF(kind){
+ const list=kind==='all'?state.students:[student()];
+ if(!list.length||!list[0]){status('pdfStatus','학생을 먼저 등록하고 선택하세요.',true);return}
+ const hasWords=state.selected.length>0,hasSentences=state.sentenceSelected.length>0;
+ const missing=[...new Set(list.filter(s=>(s.sheetType||'word')==='sentence'?!hasSentences:!hasWords).map(s=>s.sheetType==='sentence'?'문장 쓰기형':'낱말 쓰기형'))];
+ if(missing.length){status('pdfStatus',missing.join('·')+'에 사용할 낱말 또는 메뉴를 먼저 선택해 주세요.',true);return}
+ status('pdfStatus',`PDF 생성 중 (${list.length}쪽)…`);
+ try{
+  const imgs=[];
+  for(const s of list)imgs.push(await svgToJpeg(activeSVG(s)));
+  const file=createPdf(imgs),name=kind==='all'?'전체학생':student().name;
+  const types=new Set(list.map(s=>s.sheetType||'word'));
+  const desc=types.size>1?'학생별유형':types.has('sentence')?'문장쓰기':'낱말쓰기';
+  download(file,`${state.date}_알고쓰고먹자_${desc}_${name}.pdf`);
+  status('pdfStatus',`${list.length}쪽 PDF를 다운로드했습니다.`);
+ }catch(e){console.error(e);status('pdfStatus','PDF 생성 오류: '+e.message,true)}
+}
+
+$('searchSchool').onclick=searchSchools;$('schoolQuery').addEventListener('keydown',e=>{if(e.key==='Enter')searchSchools()});$('today').onclick=()=>{$('date').value=today();state.date=today();resetSentenceForDate();renderPreview();save();if(state.school)loadMeals()};$('date').onchange=()=>{state.date=$('date').value;resetSentenceForDate();state.menus=[];state.selected=[];state.candidates=[];renderWords();renderExamples();renderPreview();save();if(state.school)loadMeals()};$('loadMeals').onclick=loadMeals;
+$('applyMenu').onclick=()=>{setMenus($('menuEditor').value.split(/\r?\n/));status('wordStatus','입력한 메뉴를 반영했습니다.')};$('addWord').onclick=()=>{const w=$('customWord').value.trim().replace(/\s+/g,'');if(!/^[가-힣]{1,45}$/.test(w)||(state.sheetType==='word'&&[...w].length>9)){status('wordStatus',state.sheetType==='word'?'한글 낱말을 1~9음절로 입력해 주세요.':'한글 메뉴명을 입력해 주세요.',true);return}if(state.sheetType==='sentence'){if(!state.menus.includes(w))state.menus.push(w);if(!state.sentenceSelected.includes(w))toggleWord(w);else renderWords()}else{if(!state.candidates.includes(w))state.candidates.unshift(w);if(!state.selected.includes(w))toggleWord(w);else renderWords()}$('customWord').value=''};$('customWord').onkeydown=e=>{if(e.key==='Enter')$('addWord').click()};
+$('addStudent').onclick=()=>{const name=$('newStudent').value.trim();if(!name)return;const id='s'+Date.now()+Math.random().toString(36).slice(2,6);state.students.push({id,name,...defaults(),sheetType:state.sheetType});state.active=id;$('newStudent').value='';syncSettings();renderExamples();save()};$('newStudent').onkeydown=e=>{if(e.key==='Enter')$('addStudent').click()};document.querySelectorAll('input[name=nameMode]').forEach(r=>r.onchange=()=>{const s=student();if(!s)return;s.nameMode=r.value;syncSettings();save()});document.querySelectorAll('input[name=dateMode]').forEach(r=>r.onchange=()=>{const s=student();if(!s)return;s.dateMode=r.value;syncSettings();save()});$('traceMinus').onclick=()=>counter('trace',-1);$('tracePlus').onclick=()=>counter('trace',1);$('soloMinus').onclick=()=>counter('solo',-1);$('soloPlus').onclick=()=>counter('solo',1);$('resetSettings').onclick=()=>{const s=student();if(!s)return;Object.assign(s,{...defaults(),sheetType:s.sheetType||state.sheetType});syncSettings();save()};
+$('downloadOne').onclick=()=>makePDF('one');$('downloadAll').onclick=()=>makePDF('all');$('print').onclick=()=>window.print();
+document.querySelectorAll('input[name=sentenceDisplay]').forEach(r=>r.onchange=()=>{const s=student();if(!s)return;s.sentenceDisplay=r.value;syncSettings();save()});document.querySelectorAll('input[name=sheetType]').forEach(r=>r.onchange=()=>switchType(r.value));document.querySelectorAll('input[name=exampleScope]').forEach(r=>r.onchange=()=>{state.sentenceScope=r.value;renderExamples();save()});document.querySelectorAll('input[name=sheetType]').forEach(r=>r.checked=r.value===state.sheetType);fitPreview();$('date').value=state.date;if(state.school){$('schoolQuery').value=state.school.name;$('chosenSchool').textContent=`✓ ${state.school.name} · ${state.school.office}`;loadMeals()}syncSettings();renderWords();renderExamples();
+
+$('basicTab').onclick=()=>switchWorkMode('basic');$('advancedTab').onclick=()=>switchWorkMode('advanced');updateModeUI();
