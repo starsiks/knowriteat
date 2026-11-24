@@ -47,7 +47,7 @@ function renderStudents(){const box=$('studentList');if(!state.students.length){
 function syncSettings(){const s=student();renderStudents();document.querySelectorAll('input[name=nameMode]').forEach(r=>{r.checked=(s?.nameMode||'dotted')===r.value;r.disabled=!s});document.querySelectorAll('input[name=dateMode]').forEach(r=>{r.checked=(s?.dateMode||'dotted')===r.value;r.disabled=!s});$('traceVal').textContent=s?.trace??6;$('soloVal').textContent=s?.solo??2;$('rowTotal').textContent=`총 ${(s?.trace??6)+(s?.solo??2)} / 8줄 · 진한 본보기 1줄은 별도`;const t=s?.trace??6,v=s?.solo??2;for(const [id,disabled] of [['traceMinus',!s||t<=0],['tracePlus',!s||t+v>=8],['soloMinus',!s||v<=0],['soloPlus',!s||t+v>=8]])$(id).disabled=disabled;renderPreview()}
 // A4: 794 x 1123. 엘점선체를 실제 폰트로 사용합니다.
 // @font-face는 index.html에서 제공하고 PDF 래스터화 시 SVG에 내장합니다.
-const WRITE_FONT="'NanumGothicEco','NanumGothic','Malgun Gothic',sans-serif";
+const WRITE_FONT="'NanumGothicLocal','NanumGothic','Malgun Gothic',sans-serif";
 const UI_FONT="Malgun Gothic,Noto Sans CJK KR,sans-serif";
 const DASH_FONT="ElDot";
 function strokeText(x,y,txt,size,anchor='middle'){
@@ -97,7 +97,7 @@ function buildSVG(s=student(),blankOverride=false){
       if(dateMode==='dotted')a.push(strokeText(dx+w/2,headerY+68,t,65));
       else if(dateMode==='hint')a.push(blackText(dx+9,headerY+22,t,21,400,'start'));
       // blank: 숫자를 제시하지 않고 빈칸으로 둡니다.
-    }else a.push(blackText(dx+w/2,headerY+69,t,70,600));
+    }else a.push(blackText(dx+w/2,headerY+69,t,70,400));
     dx+=w;
   }
   // 이름: 모든 가용 폭을 활용하여 점선 / 좌상단 글자 / 빈칸을 표시
@@ -125,7 +125,7 @@ function buildSVG(s=student(),blankOverride=false){
         if(i>0)a.push(`<line x1="${bx}" y1="${y}" x2="${bx}" y2="${y+h}" stroke="#111" stroke-width=".8"/>`);
         const size=Math.min(78,cellW*.79,h*.77);
         const baseline=y+(h+size)*.5-3;
-        if(r===-1)a.push(blackText(bx+cellW/2,baseline,syl[i].c,size,500));
+        if(r===-1)a.push(blackText(bx+cellW/2,baseline,syl[i].c,size,400));
         else if(r<trace)a.push(strokeText(bx+cellW/2,baseline,syl[i].c,size));
       }
     }
@@ -166,7 +166,7 @@ function jpegBytes(dataURL){const base64=dataURL.split(',')[1];const str=atob(ba
 async function svgToJpeg(svg){
  // SVG가 이미지로 변환될 때 외부 웹폰트를 대체할 수 있으므로,
  // 본보기 글자는 문서에 로드된 글꼴로 캔버스에 직접 그립니다.
- await document.fonts.load('400 78px NanumGothicEco');
+ await document.fonts.load('400 78px NanumGothicLocal');
  const doc=new DOMParser().parseFromString(svg,'image/svg+xml');
  const labels=[...doc.querySelectorAll('text')].map(t=>({x:Number(t.getAttribute('x')),y:Number(t.getAttribute('y')),text:t.textContent,
   family:t.getAttribute('font-family')||WRITE_FONT,size:Number(t.getAttribute('font-size')||20),weight:Number(t.getAttribute('font-weight')||400),
